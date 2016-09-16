@@ -20,21 +20,29 @@ func (master *Master) schedule(task *Task, proc string, filePathChan chan string
 		counter   int
 	)
 
+	go func() {
+		//now, do the operations that failed
+		for a := range master.operationFailedChan{
+			worker = <-master.idleWorkerChan
+			go master.runOperation(worker, a, &wg)
+		}
+	}()
+
 	log.Printf("Scheduling %v operations\n", proc)
+	master.operationFailedChan = make(chan *Operation, RETRY_OPERATION_BUFFER) 
 
 	counter = 0
 	for filePath = range filePathChan {
 		operation = &Operation{proc, counter, filePath}
 		counter++
-
 		worker = <-master.idleWorkerChan
 		wg.Add(1)
 		go master.runOperation(worker, operation, &wg)
-	}
+		}
 
+	log.Printf("%vx %v operations completed\n", counter, proc)	
 	wg.Wait()
-
-	log.Printf("%vx %v operations completed\n", counter, proc)
+	close(master.operationFailedChan)
 	return counter
 }
 
@@ -56,8 +64,10 @@ func (master *Master) runOperation(remoteWorker *RemoteWorker, operation *Operat
 
 	if err != nil {
 		log.Printf("Operation %v '%v' Failed. Error: %v\n", operation.proc, operation.id, err)
-		wg.Done()
-		master.failedWorkerChan <- remoteWorker
+		master.failedWorkerChan <- remoteWorker		
+		//fixing the failed operation
+		master.operationFailedChan <- operation
+		master.searchOperationFailedChan = true
 	} else {
 		wg.Done()
 		master.idleWorkerChan <- remoteWorker
